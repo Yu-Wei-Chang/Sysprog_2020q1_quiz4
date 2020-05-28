@@ -1,8 +1,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+
+#define WRITE_MASK(x) ((1 << (8 - ((x) % 9))) - 1)
+#define READ_MASK(x) (~(WRITE_MASK(x)))
 
 static uint8_t output[8], input[8];
+
+static long timespec_diff(struct timespec *a, struct timespec *b) {
+  return ((b->tv_sec - a->tv_sec) * 1000000000) + (b->tv_nsec - a->tv_nsec);
+}
 
 void bitcpy(void *_dest,      /* Address of the buffer to write to */
             size_t _write,    /* Bit offset to start writing to */
@@ -18,6 +26,7 @@ void bitcpy(void *_dest,      /* Address of the buffer to write to */
   size_t write_rhs = 8 - write_lhs;
   uint8_t *dest = _dest + (_write / 8);
 
+#if 0
   static const uint8_t read_mask[] = {
       0x00, /*	== 0	00000000b	*/
       0x80, /*	== 1	10000000b	*/
@@ -41,6 +50,7 @@ void bitcpy(void *_dest,      /* Address of the buffer to write to */
       0x01, /*	== 7	00000001b	*/
       0x00  /*	== 8	00000000b	*/
   };
+#endif
 
   while (_count > 0) {
     data = *source++;
@@ -52,23 +62,23 @@ void bitcpy(void *_dest,      /* Address of the buffer to write to */
     }
 
     if (bitsize < 8)
-      data &= read_mask[bitsize];
+      data &= READ_MASK(bitsize);
 
     original = *dest;
     if (write_lhs > 0) {
-      mask = read_mask[write_lhs];
+      mask = READ_MASK(write_lhs);
       if (bitsize > write_rhs) {
         *dest++ = (original & mask) | (data >> write_lhs);
-        original = *dest & write_mask[bitsize - write_rhs];
+        original = *dest & WRITE_MASK(bitsize - write_rhs);
         *dest = original | (data << write_rhs);
       } else {
         if ((bitsize - write_lhs) > 0)
-          mask = mask | write_mask[8 - (bitsize - write_lhs)];
+          mask = mask | WRITE_MASK(8 - (bitsize - write_lhs));
         *dest++ = (original & mask) | (data >> write_lhs);
       }
     } else {
       if (bitsize < 8)
-        data = data | (original & write_mask[bitsize]);
+        data = data | (original & WRITE_MASK(bitsize));
       *dest++ = data;
     }
 
@@ -89,19 +99,29 @@ static inline void dump_binary(uint8_t *_buffer, size_t _length)
 
 int main(int _argc, char **_argv)
 {
-    memset(&input[0], 0xFF, sizeof(input));
+  FILE *fptr = NULL;
+  struct timespec t1, t2;
 
-    for (int i = 1; i <= 32; ++i) {
-        for (int j = 0; j < 16; ++j) {
-            for (int k = 0; k < 16; ++k) {
-                memset(&output[0], 0x00, sizeof(output));
-                printf("%2d:%2d:%2d ", i, k, j);
-                bitcpy(&output[0], k, &input[0], j, i);
-                dump_binary(&output[0], 8);
-                printf("\n");
-            }
-        }
+  fptr = fopen("macro_mask.txt", "w+");
+
+  memset(&input[0], 0xFF, sizeof(input));
+
+  for (int i = 1; i <= 32; ++i) {
+    clock_gettime(CLOCK_REALTIME, &t1);
+    for (int j = 0; j < 16; ++j) {
+      for (int k = 0; k < 16; ++k) {
+        memset(&output[0], 0x00, sizeof(output));
+        printf("%2d:%2d:%2d ", i, k, j);
+        bitcpy(&output[0], k, &input[0], j, i);
+        dump_binary(&output[0], 8);
+        printf("\n");
+      }
     }
+    clock_gettime(CLOCK_REALTIME, &t2);
+    fprintf(fptr, "%d %ld\n", i, timespec_diff(&t1, &t2));
+    }
+
+    fclose(fptr);
 
     return 0;
 }
