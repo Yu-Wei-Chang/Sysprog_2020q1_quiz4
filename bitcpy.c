@@ -6,7 +6,7 @@
 #define WRITE_MASK(x) ((1 << (8 - ((x) % 9))) - 1)
 #define READ_MASK(x) (~(WRITE_MASK(x)))
 
-static uint8_t output[8], input[8];
+static uint8_t output[1000], input[1000];
 
 static long timespec_diff(struct timespec *a, struct timespec *b) {
   return ((b->tv_sec - a->tv_sec) * 1000000000) + (b->tv_nsec - a->tv_nsec);
@@ -86,6 +86,48 @@ void bitcpy(void *_dest,      /* Address of the buffer to write to */
   }
 }
 
+void bitcpy_branch_less(
+    void *_dest,      /* Address of the buffer to write to */
+    size_t _write,    /* Bit offset to start writing to */
+    const void *_src, /* Address of the buffer to read from */
+    size_t _read,     /* Bit offset to start reading from */
+    size_t _count) {
+  uint8_t data, original, mask;
+  size_t bitsize;
+  size_t read_lhs = _read & 7;
+  size_t read_rhs = 8 - read_lhs;
+  const uint8_t *source = _src + (_read / 8);
+  size_t write_lhs = _write & 7; /* KK1 */
+  size_t write_rhs = 8 - write_lhs;
+  uint8_t *dest = _dest + (_write / 8);
+
+  while (_count > 0) {
+    bitsize = (_count > 8) ? 8 : _count;
+
+    /* Don't care if read_lhs > 0 and
+     * bitsize > read_rhs are matched or not.
+     * Just read 8 bits data. */
+    data = (*source++ << read_lhs) | (*source >> read_rhs);
+
+    /* Don't care if bitsize < 8 or not.
+     * data doesn't changed when it AND 11111111b */
+    data &= READ_MASK(bitsize);
+
+    original = *dest;
+    /* Handle left part of data:
+     * Mask original value out (*dest), and OR data with it. */
+    mask = READ_MASK(write_lhs);
+    *dest++ = (original & mask) | (data >> write_lhs);
+    /* Handle right part of data: */
+    if ((bitsize - write_rhs) >= 0) {
+      *dest &= WRITE_MASK(bitsize - write_rhs);
+      *dest |= (data << write_rhs);
+    }
+
+    _count -= bitsize; /* KK2 */
+  }
+}
+
 static inline void dump_8bits(uint8_t _data)
 {
     for (int i = 0; i < 8; ++i)
@@ -102,26 +144,25 @@ int main(int _argc, char **_argv)
   FILE *fptr = NULL;
   struct timespec t1, t2;
 
-  fptr = fopen("macro_mask.txt", "w+");
+  fptr = fopen("bitcpy_time_comp.txt", "w+");
 
   memset(&input[0], 0xFF, sizeof(input));
 
-  for (int i = 1; i <= 32; ++i) {
+  for (int i = 1; i <= 7900; ++i) {
+    memset(&output[0], 0x00, sizeof(output));
     clock_gettime(CLOCK_REALTIME, &t1);
-    for (int j = 0; j < 16; ++j) {
-      for (int k = 0; k < 16; ++k) {
-        memset(&output[0], 0x00, sizeof(output));
-        printf("%2d:%2d:%2d ", i, k, j);
-        bitcpy(&output[0], k, &input[0], j, i);
-        dump_binary(&output[0], 8);
-        printf("\n");
-      }
-    }
+    bitcpy(&output[0], 1, &input[0], 2, i);
     clock_gettime(CLOCK_REALTIME, &t2);
-    fprintf(fptr, "%d %ld\n", i, timespec_diff(&t1, &t2));
-    }
+    fprintf(fptr, "%d %ld", i, timespec_diff(&t1, &t2));
 
-    fclose(fptr);
+    memset(&output[0], 0x00, sizeof(output));
+    clock_gettime(CLOCK_REALTIME, &t1);
+    bitcpy_branch_less(&output[0], 1, &input[0], 2, i);
+    clock_gettime(CLOCK_REALTIME, &t2);
+    fprintf(fptr, " %ld\n", timespec_diff(&t1, &t2));
+  }
 
-    return 0;
+  fclose(fptr);
+
+  return 0;
 }
